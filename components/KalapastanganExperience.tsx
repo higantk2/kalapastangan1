@@ -1,12 +1,12 @@
 "use client";
 
-import React, { useRef, useState, useEffect, useMemo } from "react";
+import React, { useRef, useState, useMemo } from "react";
 import { Canvas, useFrame } from "@react-three/fiber";
 import { Text, Float, Stars, OrbitControls, Sparkles } from "@react-three/drei";
+import { EffectComposer, Bloom, ChromaticAberration } from "@react-three/postprocessing";
 import * as THREE from "three";
 
-// --- 1. LYRICS CONFIGURATION ---
-// Adjust the 'time' (seconds) to match exactly when the singer sings the line.
+// --- LYRICS CONFIGURATION ---
 const LYRICS_MAP = [
   { time: 0, text: "" },
   { time: 14.5, text: "Oras nang sambahin" },
@@ -16,41 +16,74 @@ const LYRICS_MAP = [
   { time: 27.0, text: "sa puso't isipan Mo" },
   { time: 32.5, text: "Sino ba ako" },
   { time: 36.0, text: "para mapansin Mo?" },
-  { time: 41.0, text: "KALAPASTANGAN" }, // The drop/intense part
+  { time: 41.0, text: "KALAPASTANGAN" }, // DROP
   { time: 45.0, text: "ang 'di Ka ibigin" },
 ];
 
-// --- 2. 3D TEXT COMPONENT ---
+// --- TUNNEL RINGS COMPONENT ---
+function TunnelRings({ intensity }: { intensity: number }) {
+  const rings = useMemo(() => Array.from({ length: 15 }), []);
+  const groupRef = useRef<THREE.Group>(null);
+
+  useFrame((state) => {
+    if (!groupRef.current) return;
+    // Rotate the whole tunnel based on music intensity
+    groupRef.current.rotation.z += 0.002 + (intensity * 0.0001);
+    
+    // Move rings towards camera
+    groupRef.current.children.forEach((mesh, i) => {
+      mesh.position.z += 0.1 + (intensity * 0.01); 
+      if (mesh.position.z > 10) {
+        mesh.position.z = -30; // Reset to back
+      }
+    });
+  });
+
+  return (
+    <group ref={groupRef}>
+      {rings.map((_, i) => (
+        <mesh key={i} position={[0, 0, -i * 3]} rotation={[0, 0, i]}>
+          <torusGeometry args={[4, 0.05, 16, 100]} />
+          <meshStandardMaterial 
+            color={intensity > 30 ? "#ff0000" : "#333"} 
+            emissive={intensity > 30 ? "#ff0000" : "#000"}
+            emissiveIntensity={intensity > 30 ? 2 : 0}
+          />
+        </mesh>
+      ))}
+    </group>
+  );
+}
+
+// --- LYRICS DISPLAY ---
 function LyricsDisplay({ currentTime, intensity }: { currentTime: number, intensity: number }) {
   const activeLyric = useMemo(() => {
-    // Find the latest lyric that has passed
     const reversed = [...LYRICS_MAP].reverse();
     return reversed.find((l) => currentTime >= l.time);
   }, [currentTime]);
 
   const text = activeLyric ? activeLyric.text : "";
   
-  // Glitch effect: Randomly shift position slightly if intensity is high
-  const glitch = intensity > 20 ? (Math.random() - 0.5) * 0.2 : 0;
+  // Random shake on high intensity
+  const shake = intensity > 20 ? (Math.random() - 0.5) * 0.2 : 0;
 
   return (
     <Float speed={2} rotationIntensity={0.5} floatIntensity={1}>
       <Text
         font="https://fonts.gstatic.com/s/inter/v12/UcCO3FwrK3iLTeHuS_fvQtMwCp50KnMw2boKoduKmMEVuLyfAZ9hjp-Ek-_EeA.woff"
-        fontSize={intensity > 25 ? 2 : 1.5} // Text gets huge on drops
+        fontSize={intensity > 40 ? 2.5 : 1.5}
         maxWidth={8}
         lineHeight={1}
-        letterSpacing={-0.05}
         textAlign="center"
-        position={[glitch, glitch, 0]}
+        position={[shake, shake, 0]}
         anchorX="center"
         anchorY="middle"
       >
         {text}
         <meshStandardMaterial
-          color={intensity > 30 ? "#ff0000" : "#ffffff"} // White normally, Red on intensity
-          emissive={intensity > 30 ? "#ff0000" : "#000000"}
-          emissiveIntensity={intensity > 30 ? 2 : 0}
+          color={intensity > 30 ? "#ff0000" : "#ffffff"}
+          emissive={intensity > 30 ? "#ff0000" : "#ffffff"}
+          emissiveIntensity={intensity > 30 ? 3 : 0.2}
           toneMapped={false}
         />
       </Text>
@@ -58,48 +91,31 @@ function LyricsDisplay({ currentTime, intensity }: { currentTime: number, intens
   );
 }
 
-// --- 3. REACTIVE LIGHTS & CAMERA SHAKE ---
-function SceneEffects({ analyser }: { analyser: AnalyserNode | null }) {
-  const lightRef = useRef<THREE.PointLight>(null);
-  const vec = new THREE.Vector3();
-
-  useFrame((state) => {
-    if (analyser && lightRef.current) {
-      const dataArray = new Uint8Array(analyser.frequencyBinCount);
-      analyser.getByteFrequencyData(dataArray);
-      
-      // Calculate average loudness (bass/intensity)
-      let sum = 0;
-      for (let i = 0; i < dataArray.length; i++) {
-        sum += dataArray[i];
-      }
-      const average = sum / dataArray.length; // 0 to 255 typically
-
-      // 1. Light Pulse
-      lightRef.current.intensity = 2 + (average / 10);
-      
-      // 2. Color Shift (White -> Deep Red)
-      const targetColor = average > 40 ? new THREE.Color("#ff0040") : new THREE.Color("#ffffff");
-      lightRef.current.color.lerp(targetColor, 0.1);
-
-      // 3. Camera Shake (Subtle heartbeat)
-      if (average > 30) {
-        state.camera.position.lerp(vec.set((Math.random() - 0.5) * 0.2, 0, 8 + (Math.random() * 0.5)), 0.1);
-      } else {
-        state.camera.position.lerp(vec.set(0, 0, 8), 0.05);
-      }
-    }
-  });
+// --- EFFECTS RIG ---
+// Controls the Glow (Bloom) and Glitch (ChromaticAberration)
+function EffectsRig({ intensity }: { intensity: number }) {
+  const isHeavy = intensity > 30; // The threshold for "Heavy" music
 
   return (
-    <>
-      <pointLight ref={lightRef} position={[0, 0, 5]} distance={20} decay={2} />
-      <ambientLight intensity={0.2} />
-    </>
+    <EffectComposer disableNormalPass>
+      {/* Bloom makes bright things glow */}
+      <Bloom 
+        luminanceThreshold={0.5} 
+        mipmapBlur 
+        intensity={isHeavy ? 2.5 : 0.5} 
+        radius={isHeavy ? 0.8 : 0.4} 
+      />
+      {/* Chromatic Aberration splits the RGB channels (Glitch effect) */}
+      <ChromaticAberration 
+        offset={new THREE.Vector2(isHeavy ? 0.005 : 0, isHeavy ? 0.005 : 0)} 
+        radialModulation={false}
+        modulationOffset={0}
+      />
+    </EffectComposer>
   );
 }
 
-// --- 4. MAIN COMPONENT ---
+// --- MAIN COMPONENT ---
 export default function KalapastanganExperience() {
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
@@ -109,7 +125,7 @@ export default function KalapastanganExperience() {
   const analyserRef = useRef<AnalyserNode | null>(null);
 
   const startExperience = () => {
-    if(audioRef.current) return; // Prevent double click
+    if(audioRef.current) return;
 
     const audio = new Audio("/song.mp3");
     audioRef.current = audio;
@@ -131,16 +147,14 @@ export default function KalapastanganExperience() {
       setIsPlaying(true);
     }).catch(e => console.error("Audio play failed", e));
 
-    // Sync Loop
     const updateLoop = () => {
       if(!audio.paused && !audio.ended) {
         setCurrentTime(audio.currentTime);
         
-        // Get intensity for React state (to drive text size/color in pure React components)
         const dataArray = new Uint8Array(analyser.frequencyBinCount);
         analyser.getByteFrequencyData(dataArray);
         const avg = dataArray.reduce((a, b) => a + b) / dataArray.length;
-        setIntensity(avg);
+        setIntensity(avg); // 0 to ~150 typically
         
         requestAnimationFrame(updateLoop);
       }
@@ -150,49 +164,36 @@ export default function KalapastanganExperience() {
 
   return (
     <div className="w-full h-full relative bg-black">
-      {/* UI Overlay */}
+      {/* START BUTTON OVERLAY */}
       {!isPlaying && (
-        <div className="absolute inset-0 z-10 flex flex-col items-center justify-center bg-black/90 text-white">
-          <h1 className="text-4xl font-bold tracking-[0.5em] mb-8 text-red-600 animate-pulse">KALAPASTANGAN</h1>
+        <div className="absolute inset-0 z-50 flex flex-col items-center justify-center bg-black text-white">
+          <h1 className="text-5xl font-bold tracking-[0.5em] mb-4 text-white drop-shadow-[0_0_15px_rgba(255,255,255,0.8)]">
+            FITTERKARMA
+          </h1>
+          <p className="text-xl tracking-widest mb-12 opacity-70">KALAPASTANGAN</p>
           <button 
             onClick={startExperience}
-            className="px-8 py-3 border border-white/30 hover:bg-white hover:text-black transition-all tracking-widest text-sm uppercase"
+            className="px-10 py-4 border border-white text-white hover:bg-white hover:text-black transition-all duration-500 tracking-[0.2em] uppercase"
           >
-            Enter The Altar
+            Initiate Ritual
           </button>
         </div>
       )}
 
-      {/* 3D Scene */}
-      <Canvas camera={{ position: [0, 0, 8], fov: 50 }}>
-        <color attach="background" args={['#050505']} />
+      {/* 3D SCENE */}
+      <Canvas camera={{ position: [0, 0, 10], fov: 45 }}>
+        <color attach="background" args={['#000000']} />
         
-        {/* Atmosphere */}
-        <fog attach="fog" args={['#000000', 5, 20]} />
-        <Stars radius={50} depth={50} count={3000} factor={4} saturation={0} fade speed={1} />
-        <Sparkles count={100} scale={10} size={2} speed={0.4} opacity={0.5} color="#fff" />
+        {/* Moving Elements */}
+        <Stars radius={100} depth={50} count={5000} factor={4} saturation={0} fade speed={2} />
+        <TunnelRings intensity={intensity} />
+        <Sparkles count={200} scale={12} size={2} speed={0.4} opacity={0.5} color={intensity > 30 ? "red" : "white"} />
 
-        {/* Core Elements */}
-        <SceneEffects analyser={analyserRef.current} />
+        {/* Text & Post Processing */}
         <LyricsDisplay currentTime={currentTime} intensity={intensity} />
+        <EffectsRig intensity={intensity} />
 
-        {/* Reflective Floor */}
-        <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -4, 0]}>
-          <planeGeometry args={[100, 100]} />
-          <meshStandardMaterial 
-            color="#111" 
-            roughness={0.1} 
-            metalness={0.8} 
-          />
-        </mesh>
-
-        <OrbitControls 
-          enableZoom={false} 
-          enablePan={false} 
-          maxPolarAngle={Math.PI / 2} // Prevent going below floor
-          autoRotate={isPlaying}
-          autoRotateSpeed={0.5}
-        />
+        <OrbitControls enableZoom={false} enablePan={false} autoRotate={isPlaying} autoRotateSpeed={0.5} />
       </Canvas>
     </div>
   );
